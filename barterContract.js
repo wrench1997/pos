@@ -1,11 +1,13 @@
 
+
 // barterContract.js
 const crypto = require('crypto');
 
 class BarterContract {
-  constructor(blockchain, p2pNetwork) {
+  constructor(blockchain, p2pNetwork, dataRouter) {
     this.blockchain = blockchain;
     this.p2pNetwork = p2pNetwork;
+    this.dataRouter = dataRouter;
     this.barterOffers = new Map(); // 存储交换提议
     this.completedBarters = []; // 已完成的交换
     this.userReputations = new Map(); // 用户信誉系统
@@ -159,13 +161,48 @@ class BarterContract {
     return offerId;
   }
 
-  // 响应交换提议
-  respondToOffer(offerId, responderId, itemOffered) {
-    if (!this.barterOffers.has(offerId)) {
+  // 获取交换提议（使用数据路由）
+  async getOffer(offerId) {
+    // 首先检查本地缓存
+    if (this.barterOffers.has(offerId)) {
+      return this.barterOffers.get(offerId);
+    }
+    
+    // 如果本地没有，通过数据路由请求
+    try {
+      const offer = await this.dataRouter.requestOfferData(offerId);
+      
+      if (offer) {
+        // 更新本地缓存
+        this.barterOffers.set(offerId, offer);
+        
+        // 如果有分片ID，更新分片存储
+        if (offer.shardId && !this.offerShards.has(offer.shardId)) {
+          this.offerShards.set(offer.shardId, new Map());
+        }
+        
+        if (offer.shardId) {
+          this.offerShards.get(offer.shardId).set(offerId, offer);
+        }
+        
+        return offer;
+      }
+    } catch (error) {
+      console.error(`获取交换提议失败: ${error.message}`);
+    }
+    
+    return null;
+  }
+
+  // 响应交换提议（修改为异步方法）
+  async respondToOffer(offerId, responderId, itemOffered) {
+    // 获取提议，可能需要通过数据路由
+    const offer = await this.getOffer(offerId);
+    
+    if (!offer) {
       throw new Error('提议不存在');
     }
     
-    const offer = this.barterOffers.get(offerId);
     const responderShardId = this.getShardId(responderId);
     
     if (offer.status !== 'OPEN') {
@@ -186,7 +223,9 @@ class BarterContract {
     this.barterOffers.set(offerId, offer);
     
     // 更新分片存储
-    this.offerShards.get(offer.shardId).set(offerId, offer);
+    if (this.offerShards.has(offer.shardId)) {
+      this.offerShards.get(offer.shardId).set(offerId, offer);
+    }
     
     // 记录到区块链
     this.blockchain.addTransaction({
@@ -215,16 +254,20 @@ class BarterContract {
       }
     });
     
+    // 通过数据路由存储更新后的提议
+    this.dataRouter.storeLocalData(`offer:${offerId}`, offer);
+    
     return true;
   }
 
-  // 确认交换
-  confirmBarter(offerId, userId) {
-    if (!this.barterOffers.has(offerId)) {
+  // 确认交换（修改为异步方法）
+  async confirmBarter(offerId, userId) {
+    // 获取提议，可能需要通过数据路由
+    const offer = await this.getOffer(offerId);
+    
+    if (!offer) {
       throw new Error('提议不存在');
     }
-    
-    const offer = this.barterOffers.get(offerId);
     
     if (offer.creator !== userId) {
       throw new Error('只有创建者可以确认交换');
@@ -242,7 +285,9 @@ class BarterContract {
     this.completedBarters.push(offer);
     
     // 更新分片存储
-    this.offerShards.get(offer.shardId).set(offerId, offer);
+    if (this.offerShards.has(offer.shardId)) {
+      this.offerShards.get(offer.shardId).set(offerId, offer);
+    }
     
     // 更新用户信誉
     this.updateReputation(offer.creator, 1);
@@ -273,6 +318,9 @@ class BarterContract {
         }
       }
     });
+    
+    // 通过数据路由存储更新后的提议
+    this.dataRouter.storeLocalData(`offer:${offerId}`, offer);
     
     return true;
   }

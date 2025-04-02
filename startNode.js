@@ -1,4 +1,5 @@
 
+
 // startNode.js
 const { Blockchain } = require('./blockchain');
 const BarterContract = require('./barterContract');
@@ -10,6 +11,8 @@ const bodyParser = require('body-parser');
 const mongoose = require('mongoose');
 const axios = require('axios');
 const yargs = require('yargs');
+// 添加 DataRouter
+const DataRouter = require('./dataRouter');
 
 // 解析命令行参数
 const argv = yargs
@@ -64,9 +67,13 @@ const barterChain = new Blockchain();
 const p2pNetwork = new P2PNetwork(barterChain, argv.p2pPort);
 const p2pServer = p2pNetwork.initP2PServer();
 
+// 初始化数据路由器
+const dataRouter = new DataRouter(p2pNetwork, barterChain);
+
 // 初始化智能合约和分片管理器
-const barterContract = new BarterContract(barterChain, p2pNetwork);
-const shardManager = new ShardManager(p2pNetwork);
+const barterContract = new BarterContract(barterChain, p2pNetwork, dataRouter);
+const shardManager = new ShardManager(p2pNetwork, dbManager, dataRouter);
+
 const itemVerification = new ItemVerification(p2pNetwork);
 
 // 连接到对等节点

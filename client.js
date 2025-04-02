@@ -1,3 +1,5 @@
+
+
 // client.js
 const axios = require('axios');
 const WebSocket = require('ws');
@@ -222,6 +224,49 @@ class BarterClient {
       return response.data;
     } catch (error) {
       console.error('获取用户交换历史失败:', error.message);
+      throw error;
+    }
+  }
+  
+  // 请求数据
+  async requestData(dataId) {
+    try {
+      return await this.sendRequest('REQUEST_DATA', { dataId });
+    } catch (error) {
+      console.error('请求数据失败:', error.message);
+      throw error;
+    }
+  }
+
+  // 获取物品详情
+  async getItemDetails(itemId) {
+    try {
+      const response = await axios.get(`http://${this.connectedNode.address}:${this.connectedNode.httpPort}/api/items/${itemId}`);
+      return response.data;
+    } catch (error) {
+      console.error('获取物品详情失败:', error.message);
+      throw error;
+    }
+  }
+
+  // 获取交易提议详情
+  async getOfferDetails(offerId) {
+    try {
+      const response = await axios.get(`http://${this.connectedNode.address}:${this.connectedNode.httpPort}/api/offers/${offerId}`);
+      return response.data;
+    } catch (error) {
+      console.error('获取交易提议详情失败:', error.message);
+      throw error;
+    }
+  }
+
+  // 获取用户详情
+  async getUserDetails(userId) {
+    try {
+      const response = await axios.get(`http://${this.connectedNode.address}:${this.connectedNode.httpPort}/api/users/${userId}/data`);
+      return response.data;
+    } catch (error) {
+      console.error('获取用户详情失败:', error.message);
       throw error;
     }
   }

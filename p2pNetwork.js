@@ -97,7 +97,8 @@ class P2PNetwork {
         nodeId, 
         lastSeen: Date.now() 
       });
-      
+
+
       // 回复握手确认
       this.sendMessage(socket, {
         type: 'HANDSHAKE_ACK',

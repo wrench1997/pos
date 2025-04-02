@@ -1,4 +1,5 @@
 
+
 // server.js
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -51,6 +52,10 @@ const barterChain = new Blockchain();
 const p2pNetwork = new P2PNetwork(barterChain, argv.p2pPort);
 const p2pServer = p2pNetwork.initP2PServer();
 
+// 在 P2P 网络初始化之后添加
+const DataRouter = require('./dataRouter');
+const dataRouter = new DataRouter(p2pNetwork, barterChain);
+
 // 连接到对等节点
 if (argv.peers) {
   const peers = argv.peers.split(',');
@@ -58,8 +63,9 @@ if (argv.peers) {
 }
 
 // 初始化智能合约和分片管理器
-const barterContract = new BarterContract(barterChain, p2pNetwork);
-const shardManager = new ShardManager(p2pNetwork, dbManager);
+const barterContract = new BarterContract(barterChain, p2pNetwork, dataRouter);
+const shardManager = new ShardManager(p2pNetwork, dbManager, dataRouter);
+
 const itemVerification = new ItemVerification(p2pNetwork);
 
 // 启动节点健康检查
