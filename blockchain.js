@@ -1,5 +1,4 @@
 
-
 // blockchain.js
 const crypto = require('crypto');
 const zlib = require('zlib');
@@ -141,7 +140,7 @@ class Blockchain {
   // 添加交易
   addTransaction(transaction) {
     // 验证交易
-    if (!transaction.from || !transaction.to || !transaction.type) {
+    if (!transaction.from || (!transaction.to && transaction.type !== 'CREATE_OFFER') || !transaction.type) {
       throw new Error('交易缺少关键字段');
     }
     
@@ -302,6 +301,13 @@ class Blockchain {
     
     // 验证签名
     return this.verifyTransactionSignature(transaction);
+  }
+  
+  // 计算区块链的总难度（在PoS中可以是总权益）
+  getChainDifficulty(chain = this.chain) {
+    return chain.reduce((total, block) => {
+      return total + (block.difficulty || 1);
+    }, 0);
   }
 }
 

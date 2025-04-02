@@ -1,3 +1,4 @@
+
 // p2pNetwork.js
 const WebSocket = require('ws');
 const crypto = require('crypto');
@@ -10,6 +11,8 @@ class P2PNetwork {
     this.port = port;
     this.nodeId = crypto.randomBytes(16).toString('hex');
     this.messageHandlers = new Map();
+    // 注册消息处理器
+    this.registerMessageHandlers();
   }
 
   // 初始化P2P服务器
@@ -18,8 +21,8 @@ class P2PNetwork {
     server.on('connection', socket => this.initConnection(socket));
     console.log(`P2P节点监听在: ${this.port}`);
     
-    // 注册消息处理器
-    this.registerMessageHandlers();
+    // 启动后尝试同步区块链
+    // setTimeout(() => this.syncBlockchain(), 3000);
     
     return server;
   }
@@ -48,11 +51,12 @@ class P2PNetwork {
     this.initMessageHandler(socket);
     this.initErrorHandler(socket);
     
-    // 发送握手消息
-    this.sendHandshake(socket);
-    
-    // 请求最新区块链
-    this.sendMessage(socket, { type: 'QUERY_LATEST' });
+    // 延迟发送握手消息
+    setTimeout(() => {
+      this.sendHandshake(socket);
+      // 请求最新区块链
+      this.sendMessage(socket, { type: 'QUERY_LATEST' });
+    }, 500); // 500毫秒延迟
   }
 
   // 初始化消息处理器
@@ -64,7 +68,15 @@ class P2PNetwork {
         if (this.messageHandlers.has(message.type)) {
           this.messageHandlers.get(message.type)(socket, message);
         } else {
-          console.log(`未知消息类型: ${message.type}`);
+          console.log(`未知消息类型: ${message.type}，正在注册处理器...`);
+          // 动态注册消息处理器
+          this.registerMessageHandlers();
+          // 再次尝试处理消息
+          if (this.messageHandlers.has(message.type)) {
+            this.messageHandlers.get(message.type)(socket, message);
+          } else {
+            console.log(`仍然无法处理消息类型: ${message.type}`);
+          }
         }
       } catch (e) {
         console.log('消息解析错误:', e);
@@ -96,6 +108,74 @@ class P2PNetwork {
       });
     });
     
+    // 处理握手确认消息
+    this.messageHandlers.set('HANDSHAKE_ACK', (socket, message) => {
+      const { nodeId } = message.data;
+      console.log(`收到来自 ${nodeId} 的握手确认消息`);
+      
+      // 更新对等节点信息
+      for (const [url, peer] of this.peers.entries()) {
+        if (peer.socket === socket) {
+          peer.nodeId = nodeId;
+          peer.lastSeen = Date.now();
+          this.peers.set(url, peer);
+          break;
+        }
+      }
+    });
+
+
+    this.messageHandlers.set('GET_PEERS', (socket) => {
+      // Respond with the list of peers this node knows about
+      const peerUrls = Array.from(this.peers.keys());
+      this.sendMessage(socket, {
+        type: 'PEERS_LIST',
+        data: peerUrls
+      });
+    });
+
+  // Handle PING messages
+  this.messageHandlers.set('PING', (socket) => {
+    console.log('Received PING, sending PONG');
+    this.sendMessage(socket, { 
+      type: 'PONG',
+      timestamp: Date.now() 
+    });
+    
+    // Update the last seen timestamp for this peer
+    for (const [url, peer] of this.peers.entries()) {
+      if (peer.socket === socket) {
+        peer.lastSeen = Date.now();
+        this.peers.set(url, peer);
+        break;
+      }
+    }
+  });
+
+  // Handle PONG messages
+  this.messageHandlers.set('PONG', (socket, message) => {
+    console.log('Received PONG response');
+    
+    // Update the last seen timestamp for this peer
+    for (const [url, peer] of this.peers.entries()) {
+      if (peer.socket === socket) {
+        peer.lastSeen = Date.now();
+        this.peers.set(url, peer);
+        break;
+      }
+    }
+  });
+
+
+    // Also add a handler for the response
+  this.messageHandlers.set('PEERS_LIST', (socket, message) => {
+    const newPeers = message.data;
+    if (Array.isArray(newPeers) && newPeers.length > 0) {
+      console.log(`收到 ${newPeers.length} 个新的对等节点地址`);
+      this.connectToPeers(newPeers);
+    }
+  });
+      
     // 处理区块链查询
     this.messageHandlers.set('QUERY_LATEST', (socket) => {
       this.sendMessage(socket, {
@@ -123,26 +203,98 @@ class P2PNetwork {
       const latestBlockReceived = receivedBlocks[receivedBlocks.length - 1];
       const latestBlockHeld = this.blockchain.getLatestBlock();
       
+      // 如果收到的区块链与当前区块链相同，不做任何操作
       if (latestBlockReceived.hash === latestBlockHeld.hash) {
         console.log('收到的区块链与当前区块链一致');
         return;
       }
       
-      if (latestBlockReceived.timestamp > latestBlockHeld.timestamp &&
-          latestBlockReceived.previousHash === latestBlockHeld.hash) {
+      // 如果收到的区块是当前链的下一个区块，直接添加
+      if (latestBlockReceived.previousHash === latestBlockHeld.hash) {
         console.log('可以将收到的区块添加到我们的链中');
-        this.blockchain.chain.push(latestBlockReceived);
-        this.broadcast({
-          type: 'RESPONSE_BLOCKCHAIN',
-          data: JSON.stringify([latestBlockReceived])
-        });
-      } else if (receivedBlocks.length === 1) {
-        console.log('需要查询完整区块链');
-        this.sendMessage(socket, { type: 'QUERY_ALL' });
-      } else if (receivedBlocks.length > 1 && 
-                latestBlockReceived.timestamp > latestBlockHeld.timestamp) {
-        console.log('收到的区块链比当前区块链长，替换当前区块链');
-        this.blockchain.replaceChain(receivedBlocks);
+        if (this.blockchain.isValidNewBlock(latestBlockReceived, latestBlockHeld)) {
+          this.blockchain.chain.push(latestBlockReceived);
+          this.broadcast({
+            type: 'RESPONSE_BLOCKCHAIN',
+            data: JSON.stringify([latestBlockReceived])
+          });
+        }
+      } 
+      // 如果只收到一个区块，请求完整区块链
+      else if (receivedBlocks.length === 1) {
+        if(this.blockchain.isChainValid(receivedBlocks)){
+          // 比较区块链的难度总和或权益证明
+          const currentChainDifficulty = this.blockchain.getChainDifficulty();
+          const receivedChainDifficulty = this.blockchain.getChainDifficulty(receivedBlocks);
+          
+          if (receivedChainDifficulty > currentChainDifficulty) {
+            console.log('收到的区块链难度更高，替换当前区块链');
+            this.blockchain.replaceChain(receivedBlocks);
+          } else if (receivedChainDifficulty === currentChainDifficulty) {
+            // 如果难度相同，可以使用其他标准决定，例如链长度或时间戳
+            console.log('区块链难度相同，使用其他标准决定');
+            
+            // 例如：使用链长度作为决定因素
+            if (receivedBlocks.length > this.blockchain.chain.length) {
+              console.log('收到的区块链更长，替换当前区块链');
+              this.blockchain.replaceChain(receivedBlocks);
+            } else if (receivedBlocks.length === this.blockchain.chain.length) {
+              // 如果长度也相同，可以使用最后区块的时间戳
+              const lastReceivedBlock = receivedBlocks[receivedBlocks.length - 1];
+              const lastLocalBlock = this.blockchain.getLatestBlock();
+              
+              if (lastReceivedBlock.timestamp < lastLocalBlock.timestamp) {
+                console.log('收到的区块链最后区块时间戳更早，替换当前区块链');
+                this.blockchain.replaceChain(receivedBlocks);
+              } else {
+                console.log('保留当前区块链，最后区块时间戳更早');
+              }
+            } else {
+              console.log('保留当前区块链，链更长');
+            }
+          } else {
+            console.log('保留当前区块链，难度更高');
+          }
+        }
+        // console.log('需要查询完整区块链');
+        // this.sendMessage(socket, { type: 'QUERY_ALL' });
+      } 
+      // 如果收到的区块链比当前的长，并且有效，则替换
+      else if (receivedBlocks.length > 1) {
+        if(this.blockchain.isChainValid(receivedBlocks)){
+          // 比较区块链的难度总和或权益证明
+          const currentChainDifficulty = this.blockchain.getChainDifficulty();
+          const receivedChainDifficulty = this.blockchain.getChainDifficulty(receivedBlocks);
+          
+          if (receivedChainDifficulty > currentChainDifficulty) {
+            console.log('收到的区块链难度更高，替换当前区块链');
+            this.blockchain.replaceChain(receivedBlocks);
+          } else if (receivedChainDifficulty === currentChainDifficulty) {
+            // 如果难度相同，可以使用其他标准决定，例如链长度或时间戳
+            console.log('区块链难度相同，使用其他标准决定');
+            
+            // 例如：使用链长度作为决定因素
+            if (receivedBlocks.length > this.blockchain.chain.length) {
+              console.log('收到的区块链更长，替换当前区块链');
+              this.blockchain.replaceChain(receivedBlocks);
+            } else if (receivedBlocks.length === this.blockchain.chain.length) {
+              // 如果长度也相同，可以使用最后区块的时间戳
+              const lastReceivedBlock = receivedBlocks[receivedBlocks.length - 1];
+              const lastLocalBlock = this.blockchain.getLatestBlock();
+              
+              if (lastReceivedBlock.timestamp < lastLocalBlock.timestamp) {
+                console.log('收到的区块链最后区块时间戳更早，替换当前区块链');
+                this.blockchain.replaceChain(receivedBlocks);
+              } else {
+                console.log('保留当前区块链，最后区块时间戳更早');
+              }
+            } else {
+              console.log('保留当前区块链，链更长');
+            }
+          } else {
+            console.log('保留当前区块链，难度更高');
+          }
+        }
       }
     });
     
@@ -266,6 +418,7 @@ class P2PNetwork {
   getActiveNodesCount() {
     return this.peers.size;
   }
+
 }
 
 module.exports = P2PNetwork;

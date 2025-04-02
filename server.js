@@ -9,7 +9,7 @@ const User = require('./models/user');
 const ShardManager = require('./shardManager');
 const P2PNetwork = require('./p2pNetwork');
 const ItemVerification = require('./itemVerification');
-const mongoose = require('mongoose');
+const IndexedDBManager = require('./indexedDBManager');
 const yargs = require('yargs');
 
 // 解析命令行参数
@@ -33,10 +33,12 @@ const argv = yargs
   .alias('help', 'h')
   .argv;
 
-// 连接MongoDB
-mongoose.connect('mongodb://localhost:27017/barterchain', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
+// 初始化 IndexedDB
+const dbManager = new IndexedDBManager();
+dbManager.open().then(() => {
+  console.log('IndexedDB 初始化成功');
+}).catch(err => {
+  console.error('IndexedDB 初始化失败:', err);
 });
 
 const app = express();
@@ -57,7 +59,7 @@ if (argv.peers) {
 
 // 初始化智能合约和分片管理器
 const barterContract = new BarterContract(barterChain, p2pNetwork);
-const shardManager = new ShardManager(p2pNetwork);
+const shardManager = new ShardManager(p2pNetwork, dbManager);
 const itemVerification = new ItemVerification(p2pNetwork);
 
 // 启动节点健康检查
@@ -87,23 +89,20 @@ app.post('/api/users/register', async (req, res) => {
     });
     
     // 创建用户
-    const user = new User({
+    const user = await User.save({
       username,
       email,
-      passwordHash: crypto.createHash('sha256').update(password).digest('hex'),
+      password,
       publicKey,
-      walletAddress: crypto.randomBytes(20).toString('hex'),
-      createdAt: Date.now()
-    });
-    
-    await user.save();
+      walletAddress: crypto.randomBytes(20).toString('hex')
+    }, dbManager);
     
     // 将用户添加为验证者（初始权益为10）
     barterChain.addValidator(user.walletAddress, 10);
     
     res.status(201).json({
       message: '用户注册成功',
-      userId: user._id,
+      userId: user.userId,
       walletAddress: user.walletAddress,
       privateKey // 实际应用中不应返回私钥，而是让用户安全保存
     });
@@ -144,7 +143,9 @@ app.get('/api/users/:userId/items', async (req, res) => {
     // 使用分片管理器获取用户物品
     const items = await shardManager.getUserItems(userId);
     
-    res.status(200).json(items);
+    res.status(200).json({
+      data: items
+    });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -155,9 +156,13 @@ app.post('/api/barter/offers', async (req, res) => {
   try {
     const { userId, itemId, itemWanted, description } = req.body;
     
+    console.log('创建交换提议:', { userId, itemId, itemWanted });
+    
     // 获取物品详情
     const items = await shardManager.getUserItems(userId);
-    const item = items.find(i => i._id.toString() === itemId);
+    console.log('用户物品:', items);
+    
+    const item = items.find(i => i.id === itemId || i._id === itemId);
     
     if (!item) {
       return res.status(404).json({ error: '物品不存在' });
@@ -187,6 +192,7 @@ app.post('/api/barter/offers', async (req, res) => {
       offerId
     });
   } catch (error) {
+    console.error('创建交换提议错误:', error);
     res.status(400).json({ error: error.message });
   }
 });
@@ -199,7 +205,7 @@ app.post('/api/barter/offers/:offerId/respond', async (req, res) => {
     
     // 获取物品详情
     const items = await shardManager.getUserItems(userId);
-    const item = items.find(i => i._id.toString() === itemId);
+    const item = items.find(i => i.id === itemId);
     
     if (!item) {
       return res.status(404).json({ error: '物品不存在' });
@@ -321,12 +327,12 @@ app.get('/api/market/items', async (req, res) => {
 
 // 获取所有验证者信息
 app.get('/api/blockchain/validators', (req, res) => {
-    const validators = Array.from(barterChain.validators.entries()).map(([address, stake]) => {
-      return { address, stake };
-    });
-    
-    res.status(200).json(validators);
+  const validators = Array.from(barterChain.validators.entries()).map(([address, stake]) => {
+    return { address, stake };
   });
+  
+  res.status(200).json(validators);
+});
 
 // 添加P2P网络相关API
 app.get('/api/peers', (req, res) => {
@@ -343,7 +349,7 @@ app.post('/api/peers', (req, res) => {
   p2pNetwork.connectToPeers([peer]);
   res.status(200).json({ message: '已连接到对等节点' });
 });
-  
+
 // 启动服务器
 const PORT = argv.port;
 app.listen(PORT, () => {

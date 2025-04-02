@@ -1,9 +1,10 @@
+
 // clientTest.js
 const BarterClient = require('./client');
 
 async function testClient() {
   try {
-    const client = new BarterClient('http://localhost:5000');
+    const client = new BarterClient('http://localhost:5005');
     
     // 连接到网络
     await client.connect();
@@ -28,7 +29,7 @@ async function testClient() {
     // 创建交换提议
     const offer = await client.createBarterOffer(
       user.userId,
-      items.data[0]._id,
+      items.data[0].id, // 注意这里使用 id 而不是 _id
       '想要一部手机',
       '用我的测试物品换手机'
     );

@@ -4,7 +4,7 @@ const bodyParser = require('body-parser');
 const crypto = require('crypto');
 
 class DiscoveryService {
-  constructor(port = 5000) {
+  constructor(port = 5005) {
     this.port = port;
     this.nodes = new Map(); // 存储已知节点
     this.app = express();

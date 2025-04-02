@@ -1,12 +1,13 @@
+
 // shardManager.js
-const mongoose = require('mongoose');
 const crypto = require('crypto');
-const { getItemModel } = require('./models/item');
 
 class ShardManager {
-  constructor() {
-    this.shardMap = new Map(); // 缓存分片模型
+  constructor(p2pNetwork, dbManager) {
+    this.p2pNetwork = p2pNetwork;
+    this.dbManager = dbManager;
     this.shardCount = 16; // 分片数量，可以根据需要调整
+    this.localShards = new Set(); // 本节点负责的分片
   }
   
   // 获取用户的分片ID
@@ -16,52 +17,30 @@ class ShardManager {
     return hash.substring(0, 2);
   }
   
-  // 获取特定分片的Item模型
-  getItemModelForShard(shardId) {
-    if (!this.shardMap.has(shardId)) {
-      this.shardMap.set(shardId, getItemModel(shardId));
-    }
-    return this.shardMap.get(shardId);
-  }
-  
-  // 获取用户的Item模型
-  getItemModelForUser(userId) {
-    const shardId = this.getUserShardId(userId);
-    return this.getItemModelForShard(shardId);
-  }
-  
   // 添加物品到用户的分片
   async addItemToUserShard(userId, itemData) {
-    const ItemModel = this.getItemModelForUser(userId);
     const shardId = this.getUserShardId(userId);
     
-    const item = new ItemModel({
+    const item = {
       ...itemData,
       userId,
-      shardId
-    });
+      shardId,
+      createdAt: Date.now()
+    };
     
-    return await item.save();
+    return await this.dbManager.saveItem(shardId, item);
   }
   
   // 获取用户的所有物品
   async getUserItems(userId) {
-    const ItemModel = this.getItemModelForUser(userId);
     const shardId = this.getUserShardId(userId);
-    
-    return await ItemModel.find({ userId, shardId });
+    return await this.dbManager.getItemsInShard(shardId, { userId });
   }
   
   // 更新物品状态
   async updateItemStatus(userId, itemId, newStatus) {
-    const ItemModel = this.getItemModelForUser(userId);
     const shardId = this.getUserShardId(userId);
-    
-    return await ItemModel.findOneAndUpdate(
-      { _id: itemId, userId, shardId },
-      { $set: { status: newStatus } },
-      { new: true }
-    );
+    return await this.dbManager.updateItem(shardId, itemId, { status: newStatus });
   }
   
   // 跨分片查询（性能较低，应尽量避免）
@@ -70,10 +49,9 @@ class ShardManager {
     
     // 并行查询所有分片
     const queries = [];
-    for (let i = 0; i < this.shardCount; i++) {
+    for (let i = 0; i < 256; i++) {
       const shardId = i.toString(16).padStart(2, '0'); // 转为两位十六进制
-      const ItemModel = this.getItemModelForShard(shardId);
-      queries.push(ItemModel.find(filter).exec());
+      queries.push(this.dbManager.getItemsInShard(shardId, filter));
     }
     
     // 等待所有查询完成

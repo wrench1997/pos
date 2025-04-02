@@ -4,7 +4,7 @@ const WebSocket = require('ws');
 const crypto = require('crypto');
 
 class BarterClient {
-  constructor(discoveryServiceUrl = 'http://localhost:5000') {
+  constructor(discoveryServiceUrl = 'http://localhost:5005') {
     this.discoveryServiceUrl = discoveryServiceUrl;
     this.nodes = [];
     this.connectedNode = null;

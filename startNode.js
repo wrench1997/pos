@@ -31,7 +31,7 @@ const argv = yargs
   .option('discovery', {
     alias: 'd',
     description: '发现服务URL',
-    default: 'http://localhost:5000'
+    default: 'http://localhost:5005'
   })
   .option('dbUrl', {
     alias: 'db',

@@ -6,15 +6,17 @@ async function runTest() {
     console.log('开始测试...');
     
     // 注册用户
+    const timestamp = Date.now();
     const user1 = await axios.post('http://localhost:3001/api/users/register', {
-      username: 'testuser1',
-      email: 'test1@example.com',
+      username: `testuser1_${timestamp}`,
+      email: `test1_${timestamp}@example.com`,
       password: 'password123'
     });
     
-    const user2 = await axios.post('http://localhost:3002/api/users/register', {
-      username: 'testuser2',
-      email: 'test2@example.com',
+    const timestamp1 = Date.now();
+    const user2 = await axios.post('http://localhost:3001/api/users/register', {
+      username: `testuser1_${timestamp1}`,
+      email: `test1_${timestamp1}@example.com`,
       password: 'password123'
     });
     
@@ -38,7 +40,7 @@ async function runTest() {
     // 创建交换提议
     const offer = await axios.post('http://localhost:3001/api/barter/offers', {
       userId: user1.data.userId,
-      itemId: item1.data.item._id,
+      itemId:  item1.data.item.id || item1.data.item._id,
       itemWanted: '想要测试物品2',
       description: '这是一个测试交换'
     });
@@ -48,10 +50,28 @@ async function runTest() {
     // 响应交换提议
     const response = await axios.post(`http://localhost:3002/api/barter/offers/${offer.data.offerId}/respond`, {
       userId: user2.data.userId,
-      itemId: item2.data.item._id
+      itemId:  item2.data.item.id || item2.data.item._id,
     });
     
     console.log('响应交换提议成功:', response.data);
+  
+
+    // 1. 确保物品ID的一致性
+    const item10 = await axios.post(`http://localhost:3001/api/users/${user1.data.userId}/items`, {
+      name: '测试物品1',
+      description: '这是一个测试物品',
+      images: ['test1.jpg']
+    });
+
+    const item20 = await axios.post(`http://localhost:3001/api/users/${user2.data.userId}/items`, {
+      name: '测试物品2',
+      description: '这是另一个测试物品',
+      images: ['test2.jpg']
+    });
+
+    // 打印物品ID以便调试
+    console.log('物品1 ID:', item10.data.item.id || item10.data.item._id);
+    console.log('物品2 ID:', item20.data.item.id || item20.data.item._id);
     
     // 确认交换
     const confirmation = await axios.post(`http://localhost:3001/api/barter/offers/${offer.data.offerId}/confirm`, {
@@ -85,7 +105,7 @@ async function runTest() {
     
     console.log('测试完成!');
   } catch (error) {
-    console.error('测试失败:', error.response ? error.response.data : error.message);
+    console.error('测试失败:', error);
   }
 }
 
