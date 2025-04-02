@@ -6,6 +6,7 @@ const crypto = require('crypto');
 class P2PNetwork {
   constructor(blockchain, port = 6001) {
     this.blockchain = blockchain;
+    this.shardManager =  null;
     this.sockets = [];
     this.peers = new Map(); // 存储对等节点信息
     this.port = port;
@@ -98,6 +99,29 @@ class P2PNetwork {
         lastSeen: Date.now() 
       });
 
+      // 处理物品添加消息
+    this.messageHandlers.set('ITEM_ADDED', (socket, message) => {
+      const { shardId, item } = message.data;
+      console.log(`收到物品添加消息，分片ID: ${shardId}, 物品ID: ${item.id}`);
+      
+      // 如果是本地负责的分片，更新分片数据
+      //if (this.blockchain && this.blockchain.shardManager && 
+      //    this.blockchain.shardManager.localShards.has(shardId)) {
+      this.shardManager.addToShardData(shardId, 'items', item);
+      //}
+    });
+
+  // 处理物品状态更新消息
+  this.messageHandlers.set('ITEM_STATUS_UPDATED', (socket, message) => {
+    const { shardId, itemId, status } = message.data;
+    console.log(`收到物品状态更新消息，分片ID: ${shardId}, 物品ID: ${itemId}, 状态: ${status}`);
+    
+    // 如果是本地负责的分片，更新分片数据
+    // if (this.blockchain && this.blockchain.shardManager && 
+    //     this.blockchain.shardManager.localShards.has(shardId)) {
+      this.shardManager.updateShardItemStatus(shardId, itemId, status);
+    //}
+  });
 
       // 回复握手确认
       this.sendMessage(socket, {

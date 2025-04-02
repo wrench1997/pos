@@ -55,24 +55,6 @@ async function runTest() {
     
     console.log('响应交换提议成功:', response.data);
   
-
-    // 1. 确保物品ID的一致性
-    const item10 = await axios.post(`http://localhost:3001/api/users/${user1.data.userId}/items`, {
-      name: '测试物品1',
-      description: '这是一个测试物品',
-      images: ['test1.jpg']
-    });
-
-    const item20 = await axios.post(`http://localhost:3001/api/users/${user2.data.userId}/items`, {
-      name: '测试物品2',
-      description: '这是另一个测试物品',
-      images: ['test2.jpg']
-    });
-
-    // 打印物品ID以便调试
-    console.log('物品1 ID:', item10.data.item.id || item10.data.item._id);
-    console.log('物品2 ID:', item20.data.item.id || item20.data.item._id);
-    
     // 确认交换
     const confirmation = await axios.post(`http://localhost:3001/api/barter/offers/${offer.data.offerId}/confirm`, {
       userId: user1.data.userId

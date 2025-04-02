@@ -105,32 +105,80 @@ class ShardManager {
   }
 
   // 获取用户物品
-  async getUserItems(userId) {
-    const shardId = this.getShardId(userId);
-    
-    // 如果是本地负责的分片，直接从数据库获取
-    if (this.localShards.has(shardId)) {
-      return this.dbManager.getItemsInShard(shardId, { userId });
-    } else {
-      // 否则通过数据路由请求
-      try {
-        // 请求分片数据
-        const shardData = await this.requestShardData(shardId);
-        
-        if (shardData && shardData.items) {
-          // 过滤出用户的物品
-          return Object.values(shardData.items).filter(item => item.userId === userId);
-        }
-        
-        // 如果没有通过分片数据获取到，尝试直接从数据库获取
-        return this.dbManager.getItemsInShard(shardId, { userId });
-      } catch (error) {
-        console.error(`获取用户物品失败: ${error.message}`);
-        // 尝试从数据库获取
-        return this.dbManager.getItemsInShard(shardId, { userId });
+async getUserItems(userId) {
+  const shardId = this.getShardId(userId);
+  console.log(`获取用户物品, 用户ID: ${userId}, 分片ID: ${shardId}`);
+  
+  // 尝试从多个来源获取数据
+  let items = [];
+  let errors = [];
+  
+  // 1. 首先尝试从本地分片获取
+  if (this.localShards.has(shardId)) {
+    try {
+      console.log(`从本地分片获取物品: ${shardId}`);
+      items = await this.dbManager.getItemsInShard(shardId, { userId });
+      if (items && items.length > 0) {
+        console.log(`从本地分片找到 ${items.length} 个物品`);
+        return items;
       }
+    } catch (error) {
+      console.error(`从本地分片获取失败: ${error.message}`);
+      errors.push(error);
     }
   }
+  
+  // 2. 尝试从分片数据获取
+  try {
+    console.log(`请求分片数据: ${shardId}`);
+    const shardData = await this.requestShardData(shardId);
+    
+    if (shardData && shardData.items) {
+      // 过滤出用户的物品
+      const shardItems = Object.values(shardData.items).filter(item => item.userId === userId);
+      if (shardItems.length > 0) {
+        console.log(`从分片数据找到 ${shardItems.length} 个物品`);
+        return shardItems;
+      }
+    }
+  } catch (error) {
+    console.error(`请求分片数据失败: ${error.message}`);
+    errors.push(error);
+  }
+  
+  // 3. 尝试从数据路由获取
+  try {
+    console.log(`通过数据路由获取用户物品: ${userId}`);
+    const userData = await this.dataRouter.requestUserData(userId);
+    if (userData && userData.items) {
+      console.log(`从用户数据找到 ${userData.items.length} 个物品`);
+      return userData.items;
+    }
+  } catch (error) {
+    console.error(`通过数据路由获取失败: ${error.message}`);
+    errors.push(error);
+  }
+  
+  // 4. 最后尝试从数据库获取
+  try {
+    console.log(`从数据库获取物品: ${shardId}`);
+    items = await this.dbManager.getItemsInShard(shardId, { userId });
+    if (items && items.length > 0) {
+      console.log(`从数据库找到 ${items.length} 个物品`);
+      return items;
+    }
+  } catch (error) {
+    console.error(`从数据库获取失败: ${error.message}`);
+    errors.push(error);
+  }
+  
+  // 如果所有尝试都失败，返回空数组并记录错误
+  if (errors.length > 0) {
+    console.error(`获取用户物品失败，尝试了 ${errors.length} 种方法`);
+  }
+  
+  return [];
+}
 
   // 更新物品状态
   async updateItemStatus(userId, itemId, status) {
@@ -190,48 +238,51 @@ class ShardManager {
     return allItems;
   }
 
-  // 请求分片数据
-  async requestShardData(shardId, timeoutMs = 10000) {
-    // 创建请求ID
-    const requestId = crypto.randomBytes(8).toString('hex');
+  // 在shardManager.js中修改requestShardData方法
+async requestShardData(shardId, timeoutMs = 50000) { // 增加超时时间
+  // 创建请求ID
+  const requestId = crypto.randomBytes(8).toString('hex');
+  
+  // 广播分片数据请求
+  this.p2pNetwork.broadcast({
+    type: 'SHARD_DATA_REQUEST',
+    data: {
+      shardId,
+      requesterId: this.p2pNetwork.nodeId,
+      requestId
+    }
+  });
+  
+  // 等待响应
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      // 使用正确的消息类型移除处理器
+      this.p2pNetwork.messageHandlers.delete('SHARD_DATA_RESPONSE');
+      reject(new Error('分片数据请求超时'));
+    }, timeoutMs);
     
-    // 广播分片数据请求
-    this.p2pNetwork.broadcast({
-      type: 'SHARD_DATA_REQUEST',
-      data: {
-        shardId,
-        requesterId: this.p2pNetwork.nodeId,
-        requestId
+    // 修改消息处理器注册方式
+    const originalHandler = this.p2pNetwork.messageHandlers.get('SHARD_DATA_RESPONSE');
+    
+    this.p2pNetwork.messageHandlers.set('SHARD_DATA_RESPONSE', (socket, message) => {
+      if (message.data.requestId === requestId) {
+        clearTimeout(timeout);
+        
+        // 恢复原始处理器
+        this.p2pNetwork.messageHandlers.set('SHARD_DATA_RESPONSE', originalHandler);
+        
+        if (message.data.found) {
+          resolve(message.data.data);
+        } else {
+          reject(new Error(`分片 ${shardId} 数据未找到`));
+        }
+      } else if (originalHandler) {
+        // 调用原始处理器处理其他请求
+        originalHandler(socket, message);
       }
     });
-    
-    // 等待响应
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('分片数据请求超时'));
-      }, timeoutMs);
-      
-      // 注册一次性响应处理器
-      const responseHandler = (socket, message) => {
-        if (message.type === 'SHARD_DATA_RESPONSE' && 
-            message.data.requestId === requestId) {
-          clearTimeout(timeout);
-          
-          // 移除处理器
-          this.p2pNetwork.messageHandlers.delete('SHARD_DATA_RESPONSE_' + requestId);
-          
-          if (message.data.found) {
-            resolve(message.data.data);
-          } else {
-            reject(new Error(`分片 ${shardId} 数据未找到`));
-          }
-        }
-      };
-      
-      // 注册临时处理器
-      this.p2pNetwork.messageHandlers.set('SHARD_DATA_RESPONSE_' + requestId, responseHandler);
-    });
-  }
+  });
+}
 
   // 获取分片数据
   getShardData(shardId) {

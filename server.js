@@ -65,7 +65,6 @@ if (argv.peers) {
 // 初始化智能合约和分片管理器
 const barterContract = new BarterContract(barterChain, p2pNetwork, dataRouter);
 const shardManager = new ShardManager(p2pNetwork, dbManager, dataRouter);
-
 const itemVerification = new ItemVerification(p2pNetwork);
 
 // 启动节点健康检查
@@ -244,19 +243,65 @@ app.post('/api/barter/offers/:offerId/respond', async (req, res) => {
   }
 });
 
-// 确认交换
+// 在server.js中的确认交换路由中修改
 app.post('/api/barter/offers/:offerId/confirm', async (req, res) => {
   try {
     const { offerId } = req.params;
     const { userId } = req.body;
     
+    console.log(`开始确认交换: ${offerId}, 用户: ${userId}`);
+    
+    // 获取交换提议详情
+    const offer = await barterContract.getOffer(offerId);
+    if (!offer) {
+      console.error(`交换提议不存在: ${offerId}`);
+      return res.status(404).json({ error: '交换提议不存在' });
+    }
+    
+    console.log(`交换提议详情:`, JSON.stringify(offer, null, 2));
+    
+    // 验证物品存在性
+    try {
+      // 验证创建者的物品
+      const creatorItems = await shardManager.getUserItems(offer.creator);
+      // 同时检查id和_id
+      const creatorItem = creatorItems.find(i => 
+        i.id === offer.itemOffered.id || 
+        i._id === offer.itemOffered.id ||
+        offer.itemOffered.id === i.id || 
+        offer.itemOffered.id === i._id
+      );
+      
+      if (!creatorItem) {
+        console.error(`创建者物品不存在: ${offer.itemOffered.id}`);
+        return res.status(404).json({ error: '创建者物品不存在' });
+      }
+      
+      // 验证响应者的物品
+      const responderItems = await shardManager.getUserItems(offer.responder);
+      // 同时检查id和_id
+      const responderItem = responderItems.find(i => 
+        i.id === offer.responderItem.id || 
+        i._id === offer.responderItem.id ||
+        offer.responderItem.id === i.id || 
+        offer.responderItem.id === i._id
+      );
+      
+      if (!responderItem) {
+        console.error(`响应者物品不存在: ${offer.responderItem.id}`);
+        return res.status(404).json({ error: '响应者物品不存在' });
+      }
+      
+      console.log('物品验证成功');
+    } catch (error) {
+      console.error('物品验证失败:', error);
+      return res.status(404).json({ error: '物品不存在' });
+    }
+    
     // 确认交换
-    const result = barterContract.confirmBarter(offerId, userId);
+    const result = await barterContract.confirmBarter(offerId, userId);
     
     if (result) {
-      // 获取交换提议详情
-      const offer = barterContract.barterOffers.get(offerId);
-      
       // 更新物品状态
       await shardManager.updateItemStatus(offer.creator, offer.itemOffered.id, 'EXCHANGED');
       await shardManager.updateItemStatus(offer.responder, offer.responderItem.id, 'EXCHANGED');
@@ -271,6 +316,7 @@ app.post('/api/barter/offers/:offerId/confirm', async (req, res) => {
       success: result
     });
   } catch (error) {
+    console.error('确认交换失败:', error);
     res.status(400).json({ error: error.message });
   }
 });

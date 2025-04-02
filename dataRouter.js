@@ -108,38 +108,45 @@ class DataRouter {
   }
 
   // 请求数据
-  async requestData(dataId, timeoutMs = 10000) {
-    // 首先检查本地数据
-    const localData = this.getLocalData(dataId);
-    if (localData) {
-      return localData;
+  // 修改 requestData 方法，增加重试和日志
+// 在dataRouter.js中修改requestData方法
+async requestData(dataId, timeoutMs = 50000, retries = 3) { // 增加超时时间和重试次数
+  // 首先检查本地数据
+  const localData = this.getLocalData(dataId);
+  if (localData) {
+    console.log(`从本地获取数据: ${dataId}`);
+    return localData;
+  }
+  
+  // 然后检查缓存
+  const cachedData = this.dataCache.get(dataId);
+  if (cachedData) {
+    console.log(`从缓存获取数据: ${dataId}`);
+    return cachedData;
+  }
+  
+  console.log(`请求网络数据: ${dataId}, 剩余重试次数: ${retries}`);
+  
+  // 确定数据所在分片
+  const shardId = this.getShardIdForData(dataId);
+  
+  // 创建请求ID
+  const requestId = crypto.randomBytes(8).toString('hex');
+  
+  // 广播数据请求
+  this.p2pNetwork.broadcast({
+    type: 'DATA_REQUEST',
+    data: {
+      dataId,
+      requesterId: this.p2pNetwork.nodeId,
+      requestId,
+      shardId
     }
-    
-    // 然后检查缓存
-    const cachedData = this.dataCache.get(dataId);
-    if (cachedData) {
-      return cachedData;
-    }
-    
-    // 确定数据所在分片
-    const shardId = this.getShardIdForData(dataId);
-    
-    // 创建请求ID
-    const requestId = crypto.randomBytes(8).toString('hex');
-    
-    // 广播数据请求
-    this.p2pNetwork.broadcast({
-      type: 'DATA_REQUEST',
-      data: {
-        dataId,
-        requesterId: this.p2pNetwork.nodeId,
-        requestId,
-        shardId
-      }
-    });
-    
-    // 等待响应
-    return new Promise((resolve, reject) => {
+  });
+  
+  try {
+    // 等待响应，使用类似上面的修复方法
+    const result = await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         if (this.pendingRequests.has(requestId)) {
           this.pendingRequests.delete(requestId);
@@ -149,7 +156,18 @@ class DataRouter {
       
       this.pendingRequests.set(requestId, { resolve, reject, timeout });
     });
+    
+    return result;
+  } catch (error) {
+    if (retries > 0) {
+      console.log(`请求失败，重试: ${dataId}`);
+      // 增加延迟重试，避免网络拥塞
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      return this.requestData(dataId, timeoutMs, retries - 1);
+    }
+    throw error;
   }
+}
 
   // 存储本地数据
   storeLocalData(dataId, data) {

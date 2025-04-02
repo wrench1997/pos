@@ -261,70 +261,92 @@ class BarterContract {
   }
 
   // 确认交换（修改为异步方法）
-  async confirmBarter(offerId, userId) {
-    // 获取提议，可能需要通过数据路由
-    const offer = await this.getOffer(offerId);
-    
-    if (!offer) {
-      throw new Error('提议不存在');
-    }
-    
-    if (offer.creator !== userId) {
-      throw new Error('只有创建者可以确认交换');
-    }
-    
-    if (offer.status !== 'PENDING_APPROVAL') {
-      throw new Error('此提议无法确认');
-    }
-    
-    // 更新提议状态
-    offer.status = 'CONFIRMED';
-    offer.confirmedAt = Date.now();
-    
-    this.barterOffers.set(offerId, offer);
-    this.completedBarters.push(offer);
-    
-    // 更新分片存储
-    if (this.offerShards.has(offer.shardId)) {
-      this.offerShards.get(offer.shardId).set(offerId, offer);
-    }
-    
-    // 更新用户信誉
-    this.updateReputation(offer.creator, 1);
-    this.updateReputation(offer.responder, 1);
-    
-    // 记录到区块链
-    this.blockchain.addTransaction({
-      from: userId,
-      to: offer.responder,
-      type: 'CONFIRM_BARTER',
-      data: {
-        offerId,
-        status: 'CONFIRMED'
-      },
-      timestamp: Date.now(),
-      signature: 'signed', // 实际应用中需要真实签名
-      shardId: offer.shardId
-    });
-    
-    // 广播到P2P网络
-    this.p2pNetwork.broadcast({
-      type: 'CONTRACT_CONFIRM',
-      data: {
-        offerId,
-        confirmation: {
-          status: 'CONFIRMED',
-          confirmedAt: offer.confirmedAt
-        }
-      }
-    });
-    
-    // 通过数据路由存储更新后的提议
-    this.dataRouter.storeLocalData(`offer:${offerId}`, offer);
-    
-    return true;
+async confirmBarter(offerId, userId) {
+  // 获取提议，可能需要通过数据路由
+  const offer = await this.getOffer(offerId);
+  
+  if (!offer) {
+    throw new Error('提议不存在');
   }
-
+  
+  if (offer.creator !== userId) {
+    throw new Error('只有创建者可以确认交换');
+  }
+  
+  if (offer.status !== 'PENDING_APPROVAL') {
+    throw new Error('此提议无法确认');
+  }
+  
+  // 验证物品是否存在 - 添加这部分代码
+  try {
+    // 验证创建者的物品
+    const creatorItem = await this.dataRouter.requestItemData(offer.itemOffered.id);
+    if (!creatorItem) {
+      throw new Error('创建者的物品不存在');
+    }
+    
+    // 验证响应者的物品
+    const responderItem = await this.dataRouter.requestItemData(offer.responderItem.id);
+    if (!responderItem) {
+      throw new Error('响应者的物品不存在');
+    }
+    
+    console.log('物品验证成功:', {
+      creatorItem: creatorItem.id,
+      responderItem: responderItem.id
+    });
+  } catch (error) {
+    console.error('物品验证失败:', error.message);
+    throw new Error('物品不存在');
+  }
+  
+  // 更新提议状态
+  offer.status = 'CONFIRMED';
+  offer.confirmedAt = Date.now();
+  
+  this.barterOffers.set(offerId, offer);
+  this.completedBarters.push(offer);
+  
+  // 更新分片存储
+  if (this.offerShards.has(offer.shardId)) {
+    this.offerShards.get(offer.shardId).set(offerId, offer);
+  }
+  
+  // 更新用户信誉
+  this.updateReputation(offer.creator, 1);
+  this.updateReputation(offer.responder, 1);
+  
+  // 记录到区块链
+  this.blockchain.addTransaction({
+    from: userId,
+    to: offer.responder,
+    type: 'CONFIRM_BARTER',
+    data: {
+      offerId,
+      status: 'CONFIRMED'
+    },
+    timestamp: Date.now(),
+    signature: 'signed', // 实际应用中需要真实签名
+    shardId: offer.shardId
+  });
+  
+  // 广播到P2P网络
+  this.p2pNetwork.broadcast({
+    type: 'CONTRACT_CONFIRM',
+    data: {
+      offerId,
+      confirmation: {
+        status: 'CONFIRMED',
+        confirmedAt: offer.confirmedAt
+      }
+    }
+  });
+  
+  // 通过数据路由存储更新后的提议
+  this.dataRouter.storeLocalData(`offer:${offerId}`, offer);
+  
+  return true;
+}
   // 取消交换
   cancelBarter(offerId, userId) {
     if (!this.barterOffers.has(offerId)) {

@@ -83,7 +83,7 @@ class BarterClient {
   }
   
   // 发送请求并等待响应
-  sendRequest(type, data, timeoutMs = 10000) {
+  sendRequest(type, data, timeoutMs = 30000) {
     return new Promise((resolve, reject) => {
       const requestId = crypto.randomBytes(8).toString('hex');
       
