@@ -107,67 +107,83 @@ class DataRouter {
     return this.blockchain.getShardId(userId);
   }
 
-  // 请求数据
-  // 修改 requestData 方法，增加重试和日志
-// 在dataRouter.js中修改requestData方法
-async requestData(dataId, timeoutMs = 50000, retries = 3) { // 增加超时时间和重试次数
-  // 首先检查本地数据
-  const localData = this.getLocalData(dataId);
-  if (localData) {
-    console.log(`从本地获取数据: ${dataId}`);
-    return localData;
-  }
-  
-  // 然后检查缓存
-  const cachedData = this.dataCache.get(dataId);
-  if (cachedData) {
-    console.log(`从缓存获取数据: ${dataId}`);
-    return cachedData;
-  }
-  
-  console.log(`请求网络数据: ${dataId}, 剩余重试次数: ${retries}`);
-  
-  // 确定数据所在分片
-  const shardId = this.getShardIdForData(dataId);
-  
-  // 创建请求ID
-  const requestId = crypto.randomBytes(8).toString('hex');
-  
-  // 广播数据请求
-  this.p2pNetwork.broadcast({
-    type: 'DATA_REQUEST',
-    data: {
-      dataId,
-      requesterId: this.p2pNetwork.nodeId,
-      requestId,
-      shardId
+  async requestData(dataId, timeoutMs = 50000, retries = 3) {
+    // 首先检查本地数据
+    const localData = this.getLocalData(dataId);
+    if (localData) {
+      console.log(`从本地获取数据: ${dataId}`);
+      return localData;
     }
-  });
-  
-  try {
-    // 等待响应，使用类似上面的修复方法
-    const result = await new Promise((resolve, reject) => {
+    
+    // 然后检查缓存
+    const cachedData = this.dataCache.get(dataId);
+    if (cachedData) {
+      console.log(`从缓存获取数据: ${dataId}`);
+      return cachedData;
+    }
+    
+    console.log(`请求网络数据: ${dataId}, 剩余重试次数: ${retries}`);
+    
+    // 创建请求ID
+    const requestId = crypto.randomBytes(8).toString('hex');
+    
+    // 广播数据请求
+    this.p2pNetwork.broadcast({
+      type: 'DATA_REQUEST',
+      data: {
+        dataId,
+        requesterId: this.p2pNetwork.nodeId,
+        requestId
+      }
+    });
+    
+    return new Promise((resolve, reject) => {
+      const responseHandler = (socket, message) => {
+        if (message.type === 'DATA_RESPONSE' && message.data.requestId === requestId) {
+          clearTimeout(timeout);
+          
+          // 从所有socket移除监听器
+          this.p2pNetwork.sockets.forEach(s => {
+            if (s && s.removeListener) {
+              s.removeListener('message', responseHandler);
+            }
+          });
+          
+          if (message.data.found) {
+            // 缓存数据
+            this.cacheData(dataId, message.data.data);
+            resolve(message.data.data);
+          } else {
+            if (retries > 0) {
+              setTimeout(() => {
+                this.requestData(dataId, timeoutMs, retries - 1)
+                  .then(resolve)
+                  .catch(reject);
+              }, 1000);
+            } else {
+              reject(new Error(`数据 ${dataId} 未找到`));
+            }
+          }
+        }
+      };
+      
+      // 为所有消息添加处理器
+      this.p2pNetwork.messageHandlers.set('DATA_RESPONSE', responseHandler);
+      
       const timeout = setTimeout(() => {
-        if (this.pendingRequests.has(requestId)) {
-          this.pendingRequests.delete(requestId);
+        // 移除处理器
+        this.p2pNetwork.messageHandlers.delete('DATA_RESPONSE');
+        
+        if (retries > 0) {
+          this.requestData(dataId, timeoutMs, retries - 1)
+            .then(resolve)
+            .catch(reject);
+        } else {
           reject(new Error('数据请求超时'));
         }
       }, timeoutMs);
-      
-      this.pendingRequests.set(requestId, { resolve, reject, timeout });
     });
-    
-    return result;
-  } catch (error) {
-    if (retries > 0) {
-      console.log(`请求失败，重试: ${dataId}`);
-      // 增加延迟重试，避免网络拥塞
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      return this.requestData(dataId, timeoutMs, retries - 1);
-    }
-    throw error;
   }
-}
 
   // 存储本地数据
   storeLocalData(dataId, data) {

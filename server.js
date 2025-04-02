@@ -66,7 +66,9 @@ if (argv.peers) {
 const barterContract = new BarterContract(barterChain, p2pNetwork, dataRouter);
 const shardManager = new ShardManager(p2pNetwork, dbManager, dataRouter);
 const itemVerification = new ItemVerification(p2pNetwork);
-
+p2pNetwork.setShardManager(shardManager);
+// 设置数据路由器到 P2P 网络
+p2pNetwork.setDataRouter(dataRouter);
 // 启动节点健康检查
 p2pNetwork.startNodeHealthCheck();
 

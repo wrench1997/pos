@@ -239,50 +239,60 @@ async getUserItems(userId) {
   }
 
   // 在shardManager.js中修改requestShardData方法
-async requestShardData(shardId, timeoutMs = 50000) { // 增加超时时间
-  // 创建请求ID
-  const requestId = crypto.randomBytes(8).toString('hex');
-  
-  // 广播分片数据请求
-  this.p2pNetwork.broadcast({
-    type: 'SHARD_DATA_REQUEST',
-    data: {
-      shardId,
-      requesterId: this.p2pNetwork.nodeId,
-      requestId
-    }
-  });
-  
-  // 等待响应
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      // 使用正确的消息类型移除处理器
-      this.p2pNetwork.messageHandlers.delete('SHARD_DATA_RESPONSE');
-      reject(new Error('分片数据请求超时'));
-    }, timeoutMs);
+  async requestShardData(shardId, timeoutMs = 50000) {
+    // 创建请求ID
+    const requestId = crypto.randomBytes(8).toString('hex');
     
-    // 修改消息处理器注册方式
-    const originalHandler = this.p2pNetwork.messageHandlers.get('SHARD_DATA_RESPONSE');
-    
-    this.p2pNetwork.messageHandlers.set('SHARD_DATA_RESPONSE', (socket, message) => {
-      if (message.data.requestId === requestId) {
-        clearTimeout(timeout);
-        
-        // 恢复原始处理器
-        this.p2pNetwork.messageHandlers.set('SHARD_DATA_RESPONSE', originalHandler);
-        
-        if (message.data.found) {
-          resolve(message.data.data);
-        } else {
-          reject(new Error(`分片 ${shardId} 数据未找到`));
-        }
-      } else if (originalHandler) {
-        // 调用原始处理器处理其他请求
-        originalHandler(socket, message);
+    // 广播分片数据请求
+    this.p2pNetwork.broadcast({
+      type: 'SHARD_DATA_REQUEST',
+      data: {
+        shardId,
+        requesterId: this.p2pNetwork.nodeId,
+        requestId
       }
     });
-  });
-}
+    
+    // 等待响应
+    return new Promise((resolve, reject) => {
+      // 创建一个临时消息处理函数
+      const responseHandler = (message) => {
+        try {
+          const parsedMessage = JSON.parse(message);
+          if (parsedMessage.type === 'SHARD_DATA_RESPONSE' && 
+              parsedMessage.data.requestId === requestId) {
+            // 移除所有socket的监听器
+            this.p2pNetwork.sockets.forEach(s => {
+              s.removeListener('message', responseHandler);
+            });
+            
+            if (parsedMessage.data.found) {
+              resolve(parsedMessage.data.data);
+            } else {
+              reject(new Error(`分片 ${shardId} 数据未找到`));
+            }
+          }
+        } catch (e) {
+          // 忽略解析错误
+        }
+      };
+      
+      // 为所有socket添加临时消息处理器
+      this.p2pNetwork.sockets.forEach(s => {
+        if (s && s.readyState === WebSocket.OPEN) {
+          s.on('message', responseHandler);
+        }
+      });
+      
+      setTimeout(() => {
+        // 移除所有socket的监听器
+        this.p2pNetwork.sockets.forEach(s => {
+          if (s) s.removeListener('message', responseHandler);
+        });
+        reject(new Error('分片数据请求超时'));
+      }, timeoutMs);
+    });
+  }
 
   // 获取分片数据
   getShardData(shardId) {

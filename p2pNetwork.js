@@ -6,7 +6,6 @@ const crypto = require('crypto');
 class P2PNetwork {
   constructor(blockchain, port = 6001) {
     this.blockchain = blockchain;
-    this.shardManager =  null;
     this.sockets = [];
     this.peers = new Map(); // 存储对等节点信息
     this.port = port;
@@ -44,6 +43,11 @@ class P2PNetwork {
 
   // 初始化连接
   initConnection(socket, peerUrl) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      console.log('尝试初始化未就绪的socket连接');
+      return;
+    }
+    
     this.sockets.push(socket);
     if (peerUrl) {
       this.peers.set(peerUrl, { socket, lastSeen: Date.now() });
@@ -54,36 +58,75 @@ class P2PNetwork {
     
     // 延迟发送握手消息
     setTimeout(() => {
-      this.sendHandshake(socket);
-      // 请求最新区块链
-      this.sendMessage(socket, { type: 'QUERY_LATEST' });
+      if (socket.readyState === WebSocket.OPEN) {
+        this.sendHandshake(socket);
+        // 请求最新区块链
+        this.sendMessage(socket, { type: 'QUERY_LATEST' });
+      }
     }, 500); // 500毫秒延迟
   }
-
+  
+  setShardManager(shardManager) {
+    this.shardManager = shardManager;
+  }
   // 初始化消息处理器
   initMessageHandler(socket) {
     socket.on('message', data => {
       try {
         const message = JSON.parse(data);
+        console.log(`收到消息: ${message.type}`);
         
         if (this.messageHandlers.has(message.type)) {
           this.messageHandlers.get(message.type)(socket, message);
         } else {
-          console.log(`未知消息类型: ${message.type}，正在注册处理器...`);
-          // 动态注册消息处理器
-          this.registerMessageHandlers();
-          // 再次尝试处理消息
-          if (this.messageHandlers.has(message.type)) {
-            this.messageHandlers.get(message.type)(socket, message);
-          } else {
-            console.log(`仍然无法处理消息类型: ${message.type}`);
-          }
+          console.log(`未知消息类型: ${message.type}`);
         }
       } catch (e) {
         console.log('消息解析错误:', e);
       }
     });
   }
+  // 在 P2PNetwork 类中添加
+connectToPeersWithRetry(newPeers, maxRetries = 3) {
+  newPeers.forEach(peer => {
+    this.connectToPeerWithRetry(peer, maxRetries);
+  });
+}
+
+connectToPeerWithRetry(peer, retriesLeft) {
+  if (!this.peers.has(peer)) {
+    const socket = new WebSocket(peer);
+    
+    socket.on('open', () => this.initConnection(socket, peer));
+    
+    socket.on('error', () => {
+      console.log(`连接到对等节点失败: ${peer}, 剩余重试次数: ${retriesLeft}`);
+      
+      if (retriesLeft > 0) {
+        setTimeout(() => {
+          this.connectToPeerWithRetry(peer, retriesLeft - 1);
+        }, 1000); // 1秒后重试
+      } else {
+        this.peers.delete(peer);
+      }
+    });
+  }
+}
+
+// 在 P2PNetwork 类中添加
+getLocalData(dataId) {
+  // 如果 P2PNetwork 类本身不应该存储数据
+  // 可以通过 dataRouter 来获取
+  if (this.dataRouter) {
+    return this.dataRouter.getLocalData(dataId);
+  }
+  return null;
+}
+
+// 添加设置 dataRouter 的方法
+setDataRouter(dataRouter) {
+  this.dataRouter = dataRouter;
+}
 
   // 注册所有消息处理器
   registerMessageHandlers() {
@@ -98,31 +141,6 @@ class P2PNetwork {
         nodeId, 
         lastSeen: Date.now() 
       });
-
-      // 处理物品添加消息
-    this.messageHandlers.set('ITEM_ADDED', (socket, message) => {
-      const { shardId, item } = message.data;
-      console.log(`收到物品添加消息，分片ID: ${shardId}, 物品ID: ${item.id}`);
-      
-      // 如果是本地负责的分片，更新分片数据
-      //if (this.blockchain && this.blockchain.shardManager && 
-      //    this.blockchain.shardManager.localShards.has(shardId)) {
-      this.shardManager.addToShardData(shardId, 'items', item);
-      //}
-    });
-
-  // 处理物品状态更新消息
-  this.messageHandlers.set('ITEM_STATUS_UPDATED', (socket, message) => {
-    const { shardId, itemId, status } = message.data;
-    console.log(`收到物品状态更新消息，分片ID: ${shardId}, 物品ID: ${itemId}, 状态: ${status}`);
-    
-    // 如果是本地负责的分片，更新分片数据
-    // if (this.blockchain && this.blockchain.shardManager && 
-    //     this.blockchain.shardManager.localShards.has(shardId)) {
-      this.shardManager.updateShardItemStatus(shardId, itemId, status);
-    //}
-  });
-
       // 回复握手确认
       this.sendMessage(socket, {
         type: 'HANDSHAKE_ACK',
@@ -132,6 +150,52 @@ class P2PNetwork {
         }
       });
     });
+
+     // 在数据请求和响应处理中添加
+     this.messageHandlers.set('DATA_REQUEST', (socket, message) => {
+      const { dataId, requesterId, requestId } = message.data;
+      console.log(`收到数据请求: ${dataId}, 请求ID: ${requestId}`);
+      
+      // 查找本地数据
+      const data = this.getLocalData(dataId);
+      console.log(`本地数据查找结果: ${dataId}, 找到: ${!!data}`);
+      
+      // 响应请求
+      this.sendMessage(socket, {
+        type: 'DATA_RESPONSE',
+        data: {
+          dataId,
+          requestId,
+          data: data || null,
+          found: !!data
+        }
+      });
+      console.log(`已发送数据响应: ${dataId}, 请求ID: ${requestId}`);
+    });
+
+      // 处理物品添加消息
+    this.messageHandlers.set('ITEM_ADDED', (socket, message) => {
+      const { shardId, item } = message.data;
+      console.log(`收到物品添加消息，分片ID: ${shardId}, 物品ID: ${item.id}`);
+      
+      // 如果是本地负责的分片，更新分片数据
+      //if (this.blockchain &&  this.shardManager.localShards.has(shardId)) {
+        this.shardManager.addToShardData(shardId, 'items', item);
+      //}
+    });
+
+    // 处理物品状态更新消息
+    this.messageHandlers.set('ITEM_STATUS_UPDATED', (socket, message) => {
+      const { shardId, itemId, status } = message.data;
+      console.log(`收到物品状态更新消息，分片ID: ${shardId}, 物品ID: ${itemId}, 状态: ${status}`);
+      // 如果是本地负责的分片，更新分片数据
+      //if (this.blockchain && this.shardManager.localShards.has(shardId)) {
+        this.shardManager.updateShardItemStatus(shardId, itemId, status);
+      //}
+      });
+
+
+
     
     // 处理握手确认消息
     this.messageHandlers.set('HANDSHAKE_ACK', (socket, message) => {
@@ -384,9 +448,32 @@ class P2PNetwork {
   }
 
   // 发送消息
-  sendMessage(socket, message) {
-    socket.send(JSON.stringify(message));
+// 在p2pNetwork.js中
+sendMessage(socket, message) {
+  try {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(message));
+    } else {
+      console.log('尝试向未连接的socket发送消息');
+    }
+  } catch (error) {
+    console.error('发送消息失败:', error);
   }
+}
+
+// 在dataRouter.js中
+// 在dataRouter.js中
+async requestUserData(userId) {
+  try {
+    // 用户ID作为数据ID的前缀
+    const dataId = `user:${userId}`;
+    return await this.requestData(dataId);
+  } catch (error) {
+    console.error(`请求用户数据失败 (${userId}):`, error);
+    // 返回空数据而不是抛出错误
+    return { items: [] };
+  }
+}
 
   // 广播消息给所有连接的节点
   broadcast(message) {
